@@ -12,7 +12,7 @@
 - `src/http_api.py`：HTTP路由、JSON解析和统一错误响应。
 - `src/audit.py`：实体操作审计时间线。
 - `static/index.html`：最小演示页面。
-- `tests/`：完整流程、规则和失败场景测试。
+- `tests/`：完整流程、规则、失败场景和演练账测试。
 
 ## 初始化与启动
 
@@ -44,6 +44,27 @@ curl http://127.0.0.1:8335/health
 - 活跃任务按 `dedupe_key` 防止重复派工。
 - 气体读数按阈值计算`severity`。
 - 事件关闭前必须没有失联或已定位人员、没有活跃任务，并且所有通风设备恢复运行。
+
+## 演练账（drill ledger）
+
+演练中的停风机、封通道、占避险硐室不能直接写进真实状态，否则收尾一旦漏还原就会污染现场。系统为每个演练单独立账：
+
+- `drill` 对象状态：`planned → active → (interrupted → reconciling) → closed`，另可 `abort`。
+- 演练动作通过 `POST /api/drills/<id>/ledger` 提交，只生成 `drill_entry` 账目（`projected`），真实设备状态保持演练前的样子。账目按顺序回放投影状态，因此演练里的状态机连推（如 degrade → restore → stop）照常校验。
+- 占用避险硐室时按账内驻留人数累加，超出硐室 `capacity`（核定容量）直接拒绝。
+- 演练 `active` 期间，账内涉及的风机、通道、硐室拒绝真实动作（409，提示先移交）；演练未涉及的设备不受影响。
+- 演练中途真出了事：对演练执行 `handover`（须指定一个未关闭的真实 `incident`），共享设备交给真实事件处置。此后真实动作一旦使设备状态偏离演练最新投影，冲突的演练账目立即作废（`voided`）；与现实一致的投影保留。
+- `reopen` 按真实状态重算：每个设备只核对其最新存活投影，对不上的条目标记为 `mismatch` 并在 `GET /api/drills/<id>/ledger` 的 `discrepancies` 中列出，必须逐条 `confirm`（填写核实说明）后才能结演练；被后续动作取代的历史条目不参与重算。
+- `complete` 结清演练账：存活投影置为 `settled`，`mismatch` 未确认时拒绝结清。`abort` 则把未结条目全部作废。
+- 演练账存在 `projected` 或 `mismatch` 条目期间，真实事件不能 `close`。
+
+演练相关接口：
+
+- `POST /api/drills`：创建演练（`name`、`area_code`、ISO-8601 `planned_at`）。
+- `POST /api/entities/<drill_id>/actions`：`start` / `handover`（带 `incident_id`）/ `reopen` / `complete`（带 `summary`）/ `abort`。
+- `POST /api/drills/<id>/ledger`：演练记账，请求体 `{"action":"stop|block|occupy|...","target_id":"<设备id>","data":{...}}`。
+- `GET /api/drills/<id>/ledger`：账目、差异清单和 `settled` 标志。
+- 账目条目的 `confirm`/`settle`/`void` 走通用 `POST /api/entities/<entry_id>/actions`；账目条目不能通过通用创建接口手工新建。
 
 ## 测试
 

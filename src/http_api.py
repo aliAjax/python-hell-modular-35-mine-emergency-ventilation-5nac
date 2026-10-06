@@ -84,6 +84,8 @@ def create_handler(service, rules, static_dir):
                         return self._send_html(200, handle.read())
                 if parts == ["api", "audit"]:
                     return self._send(200, {"items": service.audit_log()})
+                if len(parts) == 4 and parts[0] == "api" and parts[1] in ("drills", "drill") and parts[3] == "ledger":
+                    return self._send(200, service.drill_ledger(parts[2]))
                 if len(parts) == 3 and parts[:2] == ["api", "entities"]:
                     return self._send(200, service.get(parts[2]))
                 if len(parts) >= 2 and parts[0] == "api" and parts[1] != "entities":
@@ -104,6 +106,17 @@ def create_handler(service, rules, static_dir):
                 if parts == ["api", "offline-records"]:
                     body = self._body()
                     return self._send(200, {"items": service.merge_offline(actor, body.get("records", []))})
+                if len(parts) == 4 and parts[0] == "api" and parts[1] in ("drills", "drill") and parts[3] == "ledger":
+                    body = self._body()
+                    action = body.pop("action", None)
+                    if not action:
+                        raise ValidationError("action is required")
+                    return self._send(
+                        200,
+                        service.book_drill_action(
+                            actor, parts[2], body.pop("target_id", ""), action, body.pop("data", body)
+                        ),
+                    )
                 if len(parts) == 3 and parts[:2] == ["api", "entities"]:
                     body = self._body()
                     action = body.pop("action", None)
