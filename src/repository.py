@@ -54,6 +54,23 @@ class SQLiteRepository:
                     created_at TEXT NOT NULL,
                     PRIMARY KEY(actor_id, idem_key)
                 );
+                CREATE TABLE IF NOT EXISTS drill_ledger (
+                    id TEXT PRIMARY KEY,
+                    drill_id TEXT NOT NULL,
+                    target_kind TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    effect TEXT NOT NULL,
+                    snapshot_status TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    detail TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_drill_ledger_drill
+                    ON drill_ledger(drill_id, status);
+                CREATE INDEX IF NOT EXISTS idx_drill_ledger_target
+                    ON drill_ledger(target_kind, target_id, status);
             """)
 
     @staticmethod
@@ -198,6 +215,76 @@ class SQLiteRepository:
                 "VALUES (?, ?, ?, ?)",
                 (actor_id, idem_key, entity_id, utcnow()),
             )
+
+    @staticmethod
+    def _ledger_from_row(row):
+        return {
+            "id": row["id"],
+            "drill_id": row["drill_id"],
+            "target_kind": row["target_kind"],
+            "target_id": row["target_id"],
+            "action": row["action"],
+            "effect": json.loads(row["effect"]),
+            "snapshot_status": row["snapshot_status"],
+            "status": row["status"],
+            "detail": json.loads(row["detail"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    def create_ledger_entry(self, entry_id, drill_id, target_kind, target_id, action, effect, snapshot_status, status, detail):
+        now = utcnow()
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO drill_ledger(id, drill_id, target_kind, target_id, action, effect, snapshot_status, status, detail, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    entry_id, drill_id, target_kind, target_id, action,
+                    json.dumps(effect, ensure_ascii=False, sort_keys=True),
+                    snapshot_status, status,
+                    json.dumps(detail, ensure_ascii=False, sort_keys=True),
+                    now, now,
+                ),
+            )
+        return self.get_ledger_entry(entry_id)
+
+    def get_ledger_entry(self, entry_id):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM drill_ledger WHERE id = ?", (entry_id,)
+            ).fetchone()
+        return self._ledger_from_row(row) if row else None
+
+    def list_ledger_entries(self, drill_id=None, status=None, target_kind=None, target_id=None):
+        clauses = []
+        params = []
+        if drill_id:
+            clauses.append("drill_id = ?")
+            params.append(drill_id)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if target_kind:
+            clauses.append("target_kind = ?")
+            params.append(target_kind)
+        if target_id:
+            clauses.append("target_id = ?")
+            params.append(target_id)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM drill_ledger" + where + " ORDER BY id", params
+            ).fetchall()
+        return [self._ledger_from_row(row) for row in rows]
+
+    def update_ledger_entry_status(self, entry_id, status):
+        now = utcnow()
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE drill_ledger SET status = ?, updated_at = ? WHERE id = ?",
+                (status, now, entry_id),
+            )
+        return self.get_ledger_entry(entry_id)
 
     def ping(self):
         with self._connect() as connection:

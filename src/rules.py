@@ -61,6 +61,13 @@ def _validate_incident(data):
         raise ValidationError("invalid incident severity")
 
 
+def _validate_drill(data):
+    if len(str(data.get("name", "")).strip()) < 2:
+        raise ValidationError("drill name is too short")
+    if not str(data.get("area_code", "")).strip():
+        raise ValidationError("drill area_code is required")
+
+
 def _validate_task(data, lookup):
     incident = _find_one(lookup, "incident", "id", data.get("incident_id"))
     if not incident or incident["status"] in ("closed",):
@@ -102,6 +109,17 @@ def _close_incident(actor, entity, data, lookup):
         raise ConflictError("cannot close incident while tasks remain active")
     if [v for v in _all(lookup, "ventilation") if v["status"] != "running"]:
         raise ConflictError("cannot close incident until ventilation is restored")
+    area = entity["data"].get("area_code")
+    for drill in _all(lookup, "drill"):
+        if drill["status"] != "active":
+            continue
+        drill_area = drill["data"].get("area_code")
+        if area and drill_area and drill_area != area:
+            continue
+        if drill["data"].get("booked_count", 0) > 0 or drill["data"].get("mismatch_count", 0) > 0:
+            raise ConflictError(
+                "cannot close incident before drill ledger is settled: drill " + str(drill["id"])
+            )
     return {"closed_by": actor.user_id}
 
 
@@ -110,11 +128,12 @@ class RuleEngine:
         "workers": "worker", "sensors": "sensor", "ventilations": "ventilation",
         "passages": "passage", "refuges": "refuge", "incidents": "incident",
         "tasks": "task", "offline-records": "offline_record", "offline_records": "offline_record",
+        "drills": "drill",
     }
     INITIAL_STATUS = {
         "worker": "active", "sensor": "normal", "ventilation": "running",
         "passage": "open", "refuge": "available", "incident": "detected",
-        "task": "proposed", "offline_record": "merged",
+        "task": "proposed", "offline_record": "merged", "drill": "active",
     }
     TRANSITIONS = {
         "worker": {
@@ -172,6 +191,7 @@ class RuleEngine:
         "incident": ("area_code", "severity", "summary"),
         "task": ("incident_id", "task_type", "target", "dedupe_key"),
         "offline_record": ("source_id", "record_id", "recorded_at", "payload"),
+        "drill": ("name", "area_code"),
     }
     ACTION_REQUIRED = {
         ("worker", "rescue"): ("incident_id",),
@@ -191,6 +211,7 @@ class RuleEngine:
         "incident": ("admin", "safety", "dispatcher"),
         "task": ("admin", "dispatcher", "safety"),
         "offline_record": ("admin", "safety", "dispatcher", "field"),
+        "drill": ("admin", "safety", "dispatcher"),
     }
     ROLE_ACTIONS = {
         "mark_missing": ("admin", "safety", "dispatcher"),
@@ -233,6 +254,7 @@ class RuleEngine:
         "incident": lambda a, d, l: _validate_incident(d),
         "task": lambda a, d, l: _validate_task(d, l),
         "offline_record": lambda a, d, l: _validate_offline(d),
+        "drill": lambda a, d, l: _validate_drill(d),
     }
     CUSTOM_TRANSITIONS = {
         ("sensor", "raise_alarm"): _sensor_alarm,

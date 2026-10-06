@@ -84,6 +84,10 @@ def create_handler(service, rules, static_dir):
                         return self._send_html(200, handle.read())
                 if parts == ["api", "audit"]:
                     return self._send(200, {"items": service.audit_log()})
+                if len(parts) == 4 and parts[0] == "api" and parts[1] == "drills" and parts[3] == "ledger":
+                    query = parse_qs(parsed.query)
+                    status = query.get("status", [None])[0]
+                    return self._send(200, {"items": service.list_drill_ledger(parts[2], status=status)})
                 if len(parts) == 3 and parts[:2] == ["api", "entities"]:
                     return self._send(200, service.get(parts[2]))
                 if len(parts) >= 2 and parts[0] == "api" and parts[1] != "entities":
@@ -129,6 +133,25 @@ def create_handler(service, rules, static_dir):
                     )
                 if len(parts) == 5 and parts[0] == "api" and parts[4] == "actions":
                     return self._send(200, service.transition(actor, parts[2], parts[3], self._body(), None))
+                if len(parts) == 4 and parts[0] == "api" and parts[1] == "drills":
+                    body = self._body()
+                    drill_id = parts[2]
+                    op = parts[3]
+                    if op == "book":
+                        return self._send(
+                            200,
+                            service.book_drill_action(
+                                actor, drill_id, body.get("target_id"),
+                                body.get("action"), body.get("data", body),
+                            ),
+                        )
+                    if op == "reconcile":
+                        return self._send(200, service.reconcile_drill(actor, drill_id))
+                    if op == "settle":
+                        return self._send(
+                            200, service.settle_drill(actor, drill_id, bool(body.get("confirm", False)))
+                        )
+                    raise NotFoundError("not found")
                 if len(parts) == 2 and parts[0] == "api":
                     body = self._body()
                     idem = self.headers.get("Idempotency-Key")
